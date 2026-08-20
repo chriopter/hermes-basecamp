@@ -21,6 +21,7 @@ NotificationReader = Callable[[], dict[str, Any]]
 CHAT_LINES_STATE_BUCKET = "chat-lines-v2"
 PING_LINES_STATE_BUCKET = "ping-lines-v2"
 RECORDING_NOTIFICATIONS_STATE_BUCKET = "recording-notifications-v2"
+COMMENT_RECORDINGS_STATE_BUCKET = "comment-recordings-v1"
 ACTIONABLE_RECORDING_NOTIFICATION_TYPES = {"assignment", "comment", "mention"}
 
 
@@ -265,6 +266,64 @@ class NotificationHTTPReader:
                 raise RuntimeError("Basecamp API request failed") from None
         raise RuntimeError("Basecamp API request failed (HTTP 401)")
 
+    def request_json_pages(self, path: str) -> list[dict[str, Any]]:
+        """Follow Basecamp's trusted RFC5988 next links for a JSON collection."""
+        canonical = f"https://3.basecampapi.com/{self.account}/"
+        url = f"{canonical}{path.lstrip('/')}"
+        items: list[dict[str, Any]] = []
+        visited: set[str] = set()
+        auth_refreshed = False
+        while url:
+            if not url.startswith(canonical):
+                raise RuntimeError("Basecamp API returned an untrusted pagination link")
+            if url in visited:
+                raise RuntimeError("Basecamp API returned a cyclic pagination link")
+            visited.add(url)
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self._access_token()}",
+                    "Accept": "application/json",
+                    "User-Agent": "Hermes Basecamp Platform Plugin",
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    try:
+                        page = json.loads(response.read())
+                    except (json.JSONDecodeError, TypeError):
+                        raise RuntimeError(
+                            "Basecamp API returned invalid JSON"
+                        ) from None
+                    if not isinstance(page, list):
+                        raise RuntimeError(  # noqa: TRY004 - transport contract
+                            "Basecamp API returned invalid collection"
+                        )
+                    items.extend(item for item in page if isinstance(item, dict))
+                    link = str(response.headers.get("Link") or "")
+                    match = re.search(r'<([^>]+)>;\s*rel="next"', link)
+                    url = match.group(1) if match else ""
+                    auth_refreshed = False
+            except urllib.error.HTTPError as exc:
+                if exc.code == 401 and self.refresh_auth and not auth_refreshed:
+                    self.refresh_auth()
+                    auth_refreshed = True
+                    continue
+                raise RuntimeError(
+                    f"Basecamp API request failed (HTTP {exc.code})"
+                ) from None
+            except TimeoutError:
+                raise RuntimeError("Basecamp API request timed out") from None
+            except urllib.error.URLError as exc:
+                if isinstance(exc.reason, TimeoutError) or "timed out" in str(
+                    exc.reason
+                ).lower():
+                    raise RuntimeError("Basecamp API request timed out") from None
+                raise RuntimeError("Basecamp API request failed") from None
+            except OSError:
+                raise RuntimeError("Basecamp API request failed") from None
+        return items
+
 
 class BasecampCLI:
     def __init__(
@@ -294,6 +353,7 @@ class BasecampCLI:
         *,
         seen_identities: set[str] | None = None,
         known_buckets: set[str] | None = None,
+        own_person_id: int | None = None,
     ) -> EventBatch:
         """Return the authenticated user's actionable Basecamp notifications."""
         known_buckets = known_buckets or set()
@@ -321,6 +381,7 @@ class BasecampCLI:
 
         events: list[EventRef] = []
         event_identities: set[str] = set()
+        watermarks: set[str] = set()
         for item in notifications:
             section = str(item.get("section") or "")
             app_url = str(item.get("app_url") or "")
@@ -341,13 +402,23 @@ class BasecampCLI:
                     ACTIONABLE_RECORDING_NOTIFICATION_TYPES
                 ):
                     continue
-                revision_identity = self._notification_revision_identity(item)
-                candidates = [
-                    self._event_from_notification(
-                        item,
-                        revision_already_seen=revision_identity in seen_identities,
-                    )
-                ]
+                if str(item.get("type") or "").lower() == "comment":
+                    revision_identity = self._notification_revision_identity(item)
+                    if revision_identity in seen_identities:
+                        candidates = []
+                    else:
+                        candidates = self._events_from_comment_notification(
+                            item, seen_identities, own_person_id
+                        )
+                        watermarks.add(revision_identity)
+                else:
+                    revision_identity = self._notification_revision_identity(item)
+                    candidates = [
+                        self._event_from_notification(
+                            item,
+                            revision_already_seen=revision_identity in seen_identities,
+                        )
+                    ]
             for event in candidates:
                 if event is None or event.identity in event_identities:
                     continue
@@ -366,8 +437,85 @@ class BasecampCLI:
                 CHAT_LINES_STATE_BUCKET,
                 PING_LINES_STATE_BUCKET,
                 RECORDING_NOTIFICATIONS_STATE_BUCKET,
+                COMMENT_RECORDINGS_STATE_BUCKET,
             },
+            watermarks=watermarks,
         )
+
+    def _events_from_comment_notification(
+        self,
+        item: dict[str, Any],
+        seen_identities: set[str],
+        own_person_id: int | None,
+    ) -> list[EventRef]:
+        app_url = str(item.get("app_url") or "")
+        project_match = re.search(r"/buckets/(\d+)/", app_url)
+        subscription_match = re.search(
+            r"/buckets/(\d+)/recordings/(\d+)/",
+            str(item.get("subscription_url") or ""),
+        )
+        if not project_match or not subscription_match:
+            event = self._event_from_notification(item)
+            return [event] if event is not None else []
+        parent_id = int(subscription_match.group(2))
+        project_id = int(project_match.group(1))
+        path = f"/buckets/{project_id}/recordings/{parent_id}/comments.json"
+        request_json_pages = getattr(
+            self.notification_reader, "request_json_pages", None
+        )
+        request_json = getattr(self.notification_reader, "request_json", None)
+        if callable(request_json_pages):
+            comments = _as_list(request_json_pages(path))
+        elif callable(request_json):
+            comments: list[dict[str, Any]] = []
+            page = 1
+            while True:
+                page_path = path if page == 1 else f"{path}?page={page}"
+                current = _as_list(request_json(page_path))
+                comments.extend(current)
+                if len(current) < 15:
+                    break
+                page += 1
+        else:
+            comments = _as_list(
+                self.run(
+                    "comments",
+                    "list",
+                    str(parent_id),
+                    "--in",
+                    str(project_id),
+                    "--all",
+                ).get("data")
+            )
+
+        events: list[EventRef] = []
+        for comment in comments:
+            comment_id = comment.get("id")
+            creator = comment.get("creator") or {}
+            if not comment_id or (
+                own_person_id is not None and creator.get("id") == own_person_id
+            ):
+                continue
+            identity = f"notification:recording:{project_id}:{comment_id}"
+            if identity in seen_identities:
+                continue
+            events.append(
+                EventRef(
+                    source="notification",
+                    event_id=f"recording:{project_id}:{comment_id}",
+                    project_id=project_id,
+                    recording_id=int(comment_id),
+                    parent_recording_id=int(parent_id),
+                    recording_type="comment",
+                    creator_id=creator.get("id"),
+                    creator_name=creator.get("name"),
+                    content=_compact_text(comment.get("content")),
+                    app_url=comment.get("app_url") or app_url,
+                    created_at=comment.get("created_at") or item.get("updated_at"),
+                    kind="notification_comment",
+                )
+            )
+        return events
 
     @staticmethod
     def _notification_revision_identity(item: dict[str, Any]) -> str:

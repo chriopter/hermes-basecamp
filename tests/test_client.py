@@ -22,6 +22,91 @@ class FakeRunner:
         return self.responses[key]
 
 
+def test_http_reader_follows_trusted_comment_pagination_links(
+    tmp_path, monkeypatch
+) -> None:
+    from basecamp_platform import client as client_module
+
+    calls: list[str] = []
+
+    class Response:
+        def __init__(self, payload, link=None):
+            self.payload = payload
+            self.headers = Message()
+            if link:
+                self.headers["Link"] = link
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def open_request(request, timeout):
+        calls.append(request.full_url)
+        if "page=2" in request.full_url:
+            return Response([{"id": 2}])
+        return Response(
+            [{"id": 1}],
+            '<https://3.basecampapi.com/123/comments.json?page=2>; rel="next"',
+        )
+
+    monkeypatch.setattr(client_module.urllib.request, "urlopen", open_request)
+    reader = client_module.NotificationHTTPReader(
+        account="123", config_dir=str(tmp_path)
+    )
+    monkeypatch.setattr(reader, "_access_token", lambda: "test-token")
+
+    assert reader.request_json_pages("/comments.json") == [{"id": 1}, {"id": 2}]
+    assert calls == [
+        "https://3.basecampapi.com/123/comments.json",
+        "https://3.basecampapi.com/123/comments.json?page=2",
+    ]
+
+
+def test_http_reader_rejects_cross_account_pagination_link(
+    tmp_path, monkeypatch
+) -> None:
+    from basecamp_platform import client as client_module
+
+    class Response:
+        headers = Message()
+        headers["Link"] = (
+            '<https://3.basecampapi.com/999/comments.json?page=2>; rel="next"'
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b"[]"
+
+    monkeypatch.setattr(
+        client_module.urllib.request, "urlopen", lambda *_args, **_kwargs: Response()
+    )
+    reader = client_module.NotificationHTTPReader(
+        account="123", config_dir=str(tmp_path)
+    )
+    token_reads = 0
+
+    def token():
+        nonlocal token_reads
+        token_reads += 1
+        return "test-token"
+
+    monkeypatch.setattr(reader, "_access_token", token)
+
+    with pytest.raises(RuntimeError, match="untrusted pagination link"):
+        reader.request_json_pages("/comments.json")
+    assert token_reads == 1
+
+
 def test_http_notification_reader_reuses_etag_and_cached_body(
     tmp_path, monkeypatch
 ) -> None:
@@ -268,6 +353,7 @@ def test_collect_events_uses_personal_notifications_as_single_source() -> None:
         "chat-lines-v2",
         "ping-lines-v2",
         "recording-notifications-v2",
+        "comment-recordings-v1",
     }
     assert len(batch.events) == 3
     by_recording = {event.recording_id: event for event in batch.events}
@@ -299,6 +385,7 @@ def test_empty_notifications_still_return_known_baseline_bucket() -> None:
         "chat-lines-v2",
         "ping-lines-v2",
         "recording-notifications-v2",
+        "comment-recordings-v1",
     }
 
 
@@ -338,6 +425,139 @@ def test_notification_revision_tracks_concrete_recording_not_unread_counter() ->
     assert first.identity == same_recording.identity
     assert first.event_id == "recording:10:201"
     assert next_recording.event_id == "recording:10:202"
+
+
+def test_comment_notification_resolves_new_concrete_comments() -> None:
+    notification = {
+        "id": 7,
+        "type": "Comment",
+        "app_url": "https://app.basecamp.com/1/buckets/10/todos/200#__recording_201",
+        "subscription_url": "https://3.basecampapi.com/1/buckets/10/recordings/200/subscription.json",
+        "updated_at": "2026-08-20T10:03:00Z",
+        "unread_count": 3,
+        "creator": {"id": 40},
+    }
+    comments = [
+        {"id": 201, "content": "old", "creator": {"id": 40}},
+        {"id": 202, "content": "agent reply", "creator": {"id": 99}},
+        {"id": 203, "content": "new request", "creator": {"id": 40}},
+    ]
+    calls: list[str] = []
+
+    class Reader:
+        def __call__(self):
+            return {"unreads": [notification], "reads": []}
+
+        def request_json(self, path, **_kwargs):
+            calls.append(path)
+            assert path == "/buckets/10/recordings/200/comments.json"
+            return comments
+
+    batch = BasecampCLI(notification_reader=Reader()).collect_events(
+        seen_identities={"notification:recording:10:201"},
+        known_buckets={
+            "notifications",
+            "chat-lines-v2",
+            "ping-lines-v2",
+            "recording-notifications-v2",
+            "comment-recordings-v1",
+        },
+        own_person_id=99,
+    )
+
+    assert [event.identity for event in batch.events] == [
+        "notification:recording:10:203"
+    ]
+    event = batch.events[0]
+    assert event.parent_recording_id == 200
+    assert event.content == "new request"
+    assert event.creator_id == 40
+    assert batch.watermarks == {
+        "notification:7:2026-08-20T10:03:00Z:3"
+    }
+
+    unchanged = BasecampCLI(notification_reader=Reader()).collect_events(
+        seen_identities={
+            "notification:recording:10:201",
+            *batch.watermarks,
+        },
+        known_buckets={"comment-recordings-v1"},
+        own_person_id=99,
+    )
+    assert unchanged.events == []
+    assert calls == ["/buckets/10/recordings/200/comments.json"]
+
+
+def test_comment_recording_upgrade_returns_baseline_for_queue_to_skip() -> None:
+    notification = {
+        "id": 7,
+        "type": "Comment",
+        "app_url": "https://app.basecamp.com/1/buckets/10/todos/200#__recording_201",
+        "subscription_url": "https://3.basecampapi.com/1/buckets/10/recordings/200/subscription.json",
+        "creator": {"id": 40},
+    }
+    comments = [
+        {"id": 201, "content": "existing", "creator": {"id": 40}}
+    ]
+
+    class Reader:
+        def __call__(self):
+            return {"unreads": [notification], "reads": []}
+
+        def request_json(self, _path, **_kwargs):
+            return comments
+
+    batch = BasecampCLI(notification_reader=Reader()).collect_events(
+        known_buckets={
+            "notifications",
+            "chat-lines-v2",
+            "ping-lines-v2",
+            "recording-notifications-v2",
+        },
+        own_person_id=99,
+    )
+
+    assert [event.identity for event in batch.events] == [
+        "notification:recording:10:201"
+    ]
+    assert "comment-recordings-v1" in batch.buckets
+
+
+def test_comment_notification_walks_paginated_comment_thread() -> None:
+    notification = {
+        "id": 7,
+        "type": "Comment",
+        "app_url": "https://app.basecamp.com/1/buckets/10/todos/200#__recording_201",
+        "subscription_url": "https://3.basecampapi.com/1/buckets/10/recordings/200/subscription.json",
+        "creator": {"id": 40},
+    }
+    first_page = [
+        {"id": value, "content": f"comment {value}", "creator": {"id": 40}}
+        for value in range(201, 216)
+    ]
+    calls: list[str] = []
+
+    class Reader:
+        def __call__(self):
+            return {"unreads": [notification], "reads": []}
+
+        def request_json(self, path, **_kwargs):
+            calls.append(path)
+            return (
+                first_page
+                if "?page=" not in path
+                else [{"id": 216, "content": "latest", "creator": {"id": 40}}]
+            )
+
+    batch = BasecampCLI(notification_reader=Reader()).collect_events(
+        known_buckets={"comment-recordings-v1"}, own_person_id=99
+    )
+
+    assert calls == [
+        "/buckets/10/recordings/200/comments.json",
+        "/buckets/10/recordings/200/comments.json?page=2",
+    ]
+    assert batch.events[-1].recording_id == 216
 
 
 def test_recording_identity_upgrade_baselines_existing_notifications() -> None:
@@ -497,6 +717,7 @@ def test_chat_line_v2_upgrade_baselines_without_replay() -> None:
         "chat-lines-v2",
         "ping-lines-v2",
         "recording-notifications-v2",
+        "comment-recordings-v1",
     }
 
 

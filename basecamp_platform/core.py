@@ -5,7 +5,7 @@ import json
 import os
 import re
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -66,6 +66,7 @@ class EventRef:
 class EventBatch:
     events: list[EventRef]
     buckets: set[str]
+    watermarks: set[str] = field(default_factory=set)
 
 
 def recording_id_from_url(url: str | None) -> int | None:

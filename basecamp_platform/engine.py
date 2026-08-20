@@ -21,6 +21,7 @@ class Client(Protocol):
         *,
         seen_identities: set[str] | None = None,
         known_buckets: set[str] | None = None,
+        own_person_id: int | None = None,
     ) -> EventBatch: ...
 
     def ensure_boost(
@@ -126,15 +127,25 @@ class DurableQueue:
         events: list[EventRef],
         authorize: Authorize,
         discovered_buckets: set[str] | None = None,
+        discovered_seen: set[str] | None = None,
     ) -> None:
         value = self._load()
         seen = [str(item) for item in value.get("seen", [])]
         seen_set = set(seen)
+        for identity in discovered_seen or set():
+            if identity not in seen_set:
+                seen.append(identity)
+                seen_set.add(identity)
         known_buckets = {str(item) for item in value.get("buckets", [])}
         recording_marker = "recording-notifications-v2"
         recording_upgrade = (
             recording_marker in (discovered_buckets or set())
             and recording_marker not in known_buckets
+        )
+        comment_marker = "comment-recordings-v1"
+        comment_upgrade = (
+            comment_marker in (discovered_buckets or set())
+            and comment_marker not in known_buckets
         )
         pending: list[EventRef] = []
         for item in value.get("pending", []):
@@ -167,6 +178,8 @@ class DurableQueue:
             if recording_upgrade and (
                 event.recording_type or ""
             ).lower() not in {"chat", "ping"}:
+                continue
+            if comment_upgrade and (event.recording_type or "").lower() == "comment":
                 continue
             # A source seen for the first time is baselined, never dispatched.
             if source_bucket(event) in new_buckets:
@@ -280,8 +293,14 @@ class PollingEngine:
             self.client.collect_events,
             seen_identities=seen,
             known_buckets=buckets,
+            own_person_id=self.own_person_id,
         )
-        self.queue.ingest(batch.events, self.authorize, batch.buckets)
+        self.queue.ingest(
+            batch.events,
+            self.authorize,
+            batch.buckets,
+            batch.watermarks,
+        )
         for event in self.queue.pending():
             if event.creator_id == self.own_person_id or not self.authorize(event):
                 self.complete(event.identity)

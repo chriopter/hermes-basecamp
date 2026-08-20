@@ -389,6 +389,47 @@ def test_recording_v2_upgrade_drops_legacy_item_pending_but_keeps_chat(
     assert [event.identity for event in restarted.pending()] == [chat.identity]
 
 
+def test_comment_recording_upgrade_baselines_existing_comments(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "seen": [],
+                "buckets": [
+                    "notifications",
+                    "chat-lines-v2",
+                    "ping-lines-v2",
+                    "recording-notifications-v2",
+                ],
+                "pending": [],
+            }
+        )
+    )
+    comment = EventRef(
+        source="notification",
+        event_id="recording:10:201",
+        project_id=10,
+        recording_id=201,
+        parent_recording_id=200,
+        recording_type="comment",
+        creator_id=40,
+    )
+    queue = DurableQueue(state_path, own_person_id=99)
+
+    queue.ingest(
+        [comment],
+        lambda _event: True,
+        {"notifications", "comment-recordings-v1"},
+        {"notification:7:revision"},
+    )
+
+    seen, buckets = queue.watermarks()
+    assert comment.identity in seen
+    assert "notification:7:revision" in seen
+    assert "comment-recordings-v1" in buckets
+    assert queue.pending() == []
+
+
 @pytest.mark.asyncio
 async def test_newly_discovered_room_is_baselined_not_replayed(tmp_path: Path) -> None:
     # First poll only sees the timeline bucket. A room discovered later must be

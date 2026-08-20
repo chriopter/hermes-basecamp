@@ -105,6 +105,11 @@ Authorization happens before content is persisted, acknowledged, or passed to He
 An `Assignment` notification is an explicit work request for the authenticated
 agent and never requires an additional @mention.
 
+Basecamp may aggregate multiple comments behind one notification whose URL keeps
+pointing at the first comment. The adapter resolves that aggregate through the
+parent recording's comments endpoint and delivers each new concrete comment once.
+Comments on an assigned item therefore do not require an additional @mention.
+
 ## Session model
 
 | Context | Session key |

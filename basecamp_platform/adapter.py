@@ -46,6 +46,7 @@ class BasecampClient(Protocol):
         *,
         seen_identities: set[str] | None = None,
         known_buckets: set[str] | None = None,
+        own_person_id: int | None = None,
     ) -> EventBatch: ...
     def ensure_boost(
         self, event: EventRef, *, own_person_id: int, emoji: str
