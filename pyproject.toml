@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hermes-basecamp"
+version = "0.2.0"
+description = "Native Basecamp platform adapter for Hermes Agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+  {name = "Christopher"},
+  {name = "Hermes Agent"},
+]
+dependencies = ["Markdown>=3.7"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=6",
+]
+
+[project.entry-points."hermes_agent.plugins"]
+basecamp-platform = "basecamp_platform"
+
+[tool.hatch.build.targets.wheel]
+packages = ["basecamp_platform"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["N999"]
+"basecamp_platform/__init__.py" = ["N999"]

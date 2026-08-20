@@ -1,0 +1,11 @@
+name: basecamp-platform
+label: Basecamp
+kind: platform
+version: 0.2.0
+description: >
+  Native Basecamp gateway adapter for Hermes Agent. Uses the official
+  Basecamp CLI plus ETag-cached personal notifications to detect assignments,
+  subscribed comments, Pings, and project Campfire activity; acknowledges new
+  authorized items with a Boost, streams replies by editing one Basecamp
+  recording in place, and routes final responses to the same context.
+author: Christopher (chriopter), Hermes Agent
