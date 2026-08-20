@@ -102,6 +102,9 @@ hermes gateway status
 
 Authorization happens before content is persisted, acknowledged, or passed to Hermes. Existing notifications are baselined during first setup and migration.
 
+An `Assignment` notification is an explicit work request for the authenticated
+agent and never requires an additional @mention.
+
 ## Session model
 
 | Context | Session key |

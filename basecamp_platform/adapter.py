@@ -323,6 +323,12 @@ class BasecampAdapter(BasePlatformAdapter):
             "delivery_ids": [event_identity],
         }
         text = event.content or "Basecamp activity detected"
+        if event.kind == "notification_assignment":
+            text = (
+                "Basecamp assignment: this item is assigned to the agent and is an "
+                "explicit work request. No @mention is required.\n\n"
+                + text
+            )
         text += "\n\nBasecamp event metadata:\n" + json.dumps(
             payload, ensure_ascii=False, sort_keys=True
         )

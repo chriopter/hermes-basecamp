@@ -11,6 +11,7 @@ from gateway.session import build_session_key
 from gateway.stream_consumer import GatewayStreamConsumer, StreamConsumerConfig
 
 from basecamp_platform.adapter import BasecampAdapter
+from basecamp_platform.client import BasecampCLI
 from basecamp_platform.core import EventBatch, EventRef
 
 
@@ -101,6 +102,54 @@ async def test_dispatch_builds_native_message_event_with_stable_context(adapter:
     assert message.allow_gateway_control is False
     assert "@Agent please check" in message.text
     assert "confirmed" in message.text
+
+
+@pytest.mark.asyncio
+async def test_assignment_is_explicit_work_without_mention(
+    adapter: BasecampAdapter,
+) -> None:
+    captured: list[MessageEvent] = []
+
+    async def handle(event: MessageEvent) -> None:
+        captured.append(event)
+
+    adapter.handle_message = handle  # type: ignore[method-assign]
+    notification = {
+        "id": 7,
+        "type": "Assignment",
+        "title": "Assigned you: Prepare five switcher mockups",
+        "content_excerpt": "Prepare five switcher mockups",
+        "created_at": "2026-08-20T10:00:00Z",
+        "app_url": "https://app.basecamp.com/1/buckets/10/todos/200",
+        "creator": {"id": 40, "name": "Chris"},
+    }
+
+    def runner(_args: list[str]) -> dict:
+        return {
+            "ok": True,
+            "data": {"unreads": [notification], "reads": []},
+        }
+
+    events = BasecampCLI(runner=runner).collect_events(
+        known_buckets={
+            "notifications",
+            "chat-lines-v2",
+            "ping-lines-v2",
+            "recording-notifications-v2",
+        }
+    )
+    assert len(events.events) == 1
+    event = events.events[0]
+    assert event.kind == "notification_assignment"
+
+    await adapter._dispatch(event, "item:10:200", {"status": "confirmed"})
+
+    assert len(captured) == 1
+    assert captured[0].text.startswith(
+        "Basecamp assignment: this item is assigned to the agent and is an "
+        "explicit work request. No @mention is required."
+    )
+    assert "Prepare five switcher mockups" in captured[0].text
 
 
 @pytest.mark.asyncio

@@ -50,3 +50,4 @@
 - Direct streaming edits render escaped Markdown as Basecamp rich HTML
 - Input 👀 acknowledgement is removed after every completed, failed, or cancelled turn
 - Recommended Basecamp display settings suppress tool/interim bubbles for one visible response
+- Assignment notifications are marked as explicit work requests without requiring a mention
