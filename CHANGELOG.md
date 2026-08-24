@@ -43,7 +43,8 @@
 - Queue-mode delivery IDs merge only when Hermes merges the same sender's text
 - Edit-in-place streaming for comments, Campfires, and Pings
 - Stream status Boost lifecycle: ✏️ while editing, ✅ on success, ❌ on failure
-- Durable delivery acknowledgement moved from initial send to processing completion
+- Durable delivery acknowledgement occurs immediately after confirmed remote send,
+  closing the restart replay window before processing completion
 - Normal notification deduplication by concrete Basecamp recording ID
 - `recording-notifications-v2` no-replay migration removes stale legacy item pending work
 - Plain document/file/item changes no longer trigger work without an assignment, comment, or mention

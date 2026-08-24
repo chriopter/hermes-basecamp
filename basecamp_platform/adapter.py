@@ -124,6 +124,7 @@ class BasecampAdapter(BasePlatformAdapter):
             tuple[str, list[str]] | None
         ] = ContextVar("basecamp_delivery_context", default=None)
         self._completion_retry_ids: set[str] = set()
+        self._confirmed_delivery_ids: set[str] = set()
         self._stream_statuses: dict[tuple[str, ...], tuple[int, str, str]] = {}
         self._stream_status_retries: dict[
             tuple[str, ...], tuple[int, str, str]
@@ -435,12 +436,19 @@ class BasecampAdapter(BasePlatformAdapter):
         self._delivery_context.set(None)
         for identity in delivery_ids:
             if outcome == ProcessingOutcome.SUCCESS:
-                try:
-                    self.engine.complete(identity)
-                except Exception:  # noqa: BLE001 - retry local ACK later
-                    self._completion_retry_ids.add(identity)
+                self._complete_confirmed_delivery(identity)
             else:
                 self.engine.retry(identity)
+        self._confirmed_delivery_ids.difference_update(delivery_ids)
+
+    def _complete_confirmed_delivery(self, identity: str) -> None:
+        if identity in self._confirmed_delivery_ids:
+            return
+        try:
+            self.engine.complete(identity)
+        except Exception:  # noqa: BLE001 - retry local ACK later
+            self._completion_retry_ids.add(identity)
+        self._confirmed_delivery_ids.add(identity)
 
     def _flush_completion_retries(self) -> None:
         for identity in tuple(self._completion_retry_ids):
@@ -613,6 +621,10 @@ class BasecampAdapter(BasePlatformAdapter):
 
         data = result.get("data") or result
         message_id = str(data.get("id")) if isinstance(data, dict) and data.get("id") else None
+        delivery_context = self._delivery_context.get()
+        if delivery_context and delivery_context[0] == chat_id:
+            for identity in delivery_context[1]:
+                self._complete_confirmed_delivery(identity)
         return SendResult(
             success=True,
             message_id=message_id,

@@ -466,7 +466,7 @@ async def test_confirmed_remote_send_survives_local_completion_failure(
 
 
 @pytest.mark.asyncio
-async def test_send_defers_durable_ack_until_processing_success(
+async def test_confirmed_send_completes_durable_delivery_before_turn_finishes(
     adapter: BasecampAdapter,
 ) -> None:
     identity = "notification:stream:1"
@@ -484,7 +484,7 @@ async def test_send_defers_durable_ack_until_processing_success(
     send_result = await adapter.send(source.chat_id, "First preview")
 
     assert send_result.success is True
-    assert completed == []
+    assert completed == [identity]
     await adapter.on_processing_complete(event, ProcessingOutcome.SUCCESS)
     assert completed == [identity]
 
