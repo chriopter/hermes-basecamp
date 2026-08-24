@@ -38,8 +38,14 @@ def _compact_text(value: Any, limit: int = 4_000) -> str:
 
 
 def _render_basecamp_markdown(text: str) -> str:
+    normalized = text
+    wrapped = text.strip()
+    if re.fullmatch(r"(?is)<p(?:\s[^>]*)?>.*</p\s*>", wrapped):
+        normalized = re.sub(r"(?i)<br\s*/?>", "\n", wrapped)
+        normalized = re.sub(r"(?i)</p\s*>", "\n\n", normalized)
+        normalized = re.sub(r"(?i)<p(?:\s[^>]*)?>", "", normalized).strip()
     rendered = markdown.markdown(
-        html.escape(text),
+        html.escape(normalized),
         extensions=["fenced_code", "nl2br", "sane_lists", "tables"],
         output_format="html",
     )

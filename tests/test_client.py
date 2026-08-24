@@ -921,6 +921,40 @@ def test_ping_notification_resolves_latest_line_and_same_reply_context() -> None
     )
 
 
+def test_ping_reply_removes_gateway_html_wrappers() -> None:
+    class Reader:
+        def __init__(self):
+            self.requests = []
+
+        def __call__(self):
+            return {"unreads": []}
+
+        def request_json(self, path, *, method="GET", payload=None):
+            self.requests.append((method, path, payload))
+            return {"id": 71}
+
+    reader = Reader()
+    cli = BasecampCLI(runner=FakeRunner({}), notification_reader=reader)
+
+    cli.reply(
+        "ping:50:60",
+        "<p>⚠️ Gateway shutting down<br>— Your current task will be interrupted.</p>",
+    )
+
+    assert reader.requests == [
+        (
+            "POST",
+            "/buckets/50/chats/60/lines.json",
+            {
+                "content": (
+                    "<p>⚠️ Gateway shutting down<br>"
+                    "— Your current task will be interrupted.</p>"
+                )
+            },
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     ("context_id", "message_id", "expected_path"),
     [
@@ -983,6 +1017,31 @@ def test_edit_reply_renders_markdown_as_safe_basecamp_html() -> None:
     assert "<strong>Done</strong>" in rendered
     assert "<script>" not in rendered
     assert "&lt;script&gt;" in rendered
+
+
+def test_literal_paragraph_tags_remain_safely_escaped() -> None:
+    class Reader:
+        def __init__(self):
+            self.requests = []
+
+        def __call__(self):
+            return {"unreads": []}
+
+        def request_json(self, path, *, method="GET", payload=None):
+            self.requests.append((method, path, payload))
+            return {"id": 300}
+
+    reader = Reader()
+    cli = BasecampCLI(runner=FakeRunner({}), notification_reader=reader)
+
+    cli.edit_reply(
+        "item:10:200",
+        "300",
+        "Use <p>literally</p> in documentation.",
+    )
+
+    rendered = reader.requests[0][2]["content"]
+    assert "&lt;p&gt;literally&lt;/p&gt;" in rendered
 
 
 def test_stream_status_boost_can_be_created_and_deleted_directly() -> None:
