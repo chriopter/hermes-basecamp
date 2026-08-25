@@ -29,6 +29,63 @@ def test_register_exposes_basecamp_platform_and_authorization() -> None:
     assert registration["check_fn"]() in {True, False}
 
 
+def test_register_seeds_quiet_basecamp_display_defaults(monkeypatch) -> None:
+    from gateway import display_config
+
+    monkeypatch.delitem(display_config._PLATFORM_DEFAULTS, "basecamp", raising=False)
+    context = FakeContext()
+
+    register(context)
+
+    assert display_config._PLATFORM_DEFAULTS["basecamp"] == {
+        "tool_progress": "log",
+        "thinking_progress": False,
+        "interim_assistant_messages": False,
+        "long_running_notifications": False,
+        "busy_ack_detail": False,
+    }
+    explicit = {
+        "display": {
+            "platforms": {
+                "basecamp": {
+                    "tool_progress": "all",
+                    "interim_assistant_messages": True,
+                }
+            }
+        }
+    }
+    assert (
+        display_config.resolve_display_setting(explicit, "basecamp", "tool_progress")
+        == "all"
+    )
+    assert (
+        display_config.resolve_display_setting(
+            explicit, "basecamp", "interim_assistant_messages"
+        )
+        is True
+    )
+
+
+def test_register_preserves_existing_core_display_defaults(monkeypatch) -> None:
+    from gateway import display_config
+
+    existing = {
+        "tool_progress": "off",
+        "long_running_notifications": True,
+    }
+    monkeypatch.setitem(display_config._PLATFORM_DEFAULTS, "basecamp", existing)
+
+    register(FakeContext())
+
+    assert display_config._PLATFORM_DEFAULTS["basecamp"] == {
+        "tool_progress": "off",
+        "thinking_progress": False,
+        "interim_assistant_messages": False,
+        "long_running_notifications": True,
+        "busy_ack_detail": False,
+    }
+
+
 def test_yaml_config_keeps_allowlist_profile_scoped(monkeypatch) -> None:
     monkeypatch.delenv("BASECAMP_ALLOWED_USERS", raising=False)
     monkeypatch.delenv("BASECAMP_ALLOW_ALL_USERS", raising=False)

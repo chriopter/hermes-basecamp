@@ -1,4 +1,5 @@
 """Hermes plugin registration for the Basecamp platform."""
+
 from __future__ import annotations
 
 import shutil
@@ -7,6 +8,30 @@ from typing import Any
 
 from .adapter import BasecampAdapter
 from .core import strict_bool
+
+BASECAMP_DISPLAY_DEFAULTS: dict[str, Any] = {
+    "tool_progress": "log",
+    "thinking_progress": False,
+    "interim_assistant_messages": False,
+    "long_running_notifications": False,
+    "busy_ack_detail": False,
+}
+
+
+def register_display_defaults() -> None:
+    """Keep operational chatter out of Basecamp unless explicitly enabled."""
+    try:
+        from gateway import display_config
+    except ImportError:
+        return
+    platform_defaults = getattr(display_config, "_PLATFORM_DEFAULTS", None)
+    if not isinstance(platform_defaults, dict):
+        return
+    defaults = platform_defaults.setdefault("basecamp", {})
+    if not isinstance(defaults, dict):
+        return
+    for key, value in BASECAMP_DISPLAY_DEFAULTS.items():
+        defaults.setdefault(key, value)
 
 
 def check_requirements() -> bool:
@@ -67,6 +92,7 @@ def interactive_setup() -> None:
 
 
 def register(ctx) -> None:
+    register_display_defaults()
     ctx.register_platform(
         name="basecamp",
         label="Basecamp",

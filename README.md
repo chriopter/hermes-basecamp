@@ -76,6 +76,8 @@ display:
       tool_progress: log
       thinking_progress: false
       interim_assistant_messages: false
+      long_running_notifications: false
+      busy_ack_detail: false
 ```
 
 The adapter discovers its own Basecamp person ID through `/my/profile.json`. In multiplex mode, each profile must use an isolated `extra.config_dir`.

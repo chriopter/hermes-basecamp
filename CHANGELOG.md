@@ -50,6 +50,8 @@
 - Plain document/file/item changes no longer trigger work without an assignment, comment, or mention
 - Direct streaming edits render escaped Markdown as Basecamp rich HTML
 - Ping replies normalize outer Gateway `<p>`/`<br>` wrappers without allowing raw HTML
+- Quiet Basecamp display defaults keep tool, interim, heartbeat, and verbose busy
+  progress out of comments unless users explicitly opt in
 - Input 👀 acknowledgement is removed after every completed, failed, or cancelled turn
 - Recommended Basecamp display settings suppress tool/interim bubbles for one visible response
 - Assignment notifications are marked as explicit work requests without requiring a mention
